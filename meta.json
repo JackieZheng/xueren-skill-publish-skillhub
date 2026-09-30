@@ -1,0 +1,15 @@
+{
+  "id": "xueren-skill-publish-skillhub",
+  "name": "雪人老师·Skill发布到SkillHub",
+  "version": "1.0.1",
+  "author": "雪人",
+  "platforms": [
+    "ima",
+    "WorkBuddy",
+    "QClaw"
+  ],
+  "description": "One-click package and publish WorkBuddy skills to SkillHub community (zip + CLI + retry + JSON output).",
+  "github": "https://github.com/JackieZheng/xueren-skill-publish-skillhub",
+  "agent_created": true,
+  "updated_at": "2026-09-30"
+}
