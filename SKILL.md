@@ -8,7 +8,7 @@ displayName: 雪人老师·Skill发布到SkillHub
 summary: 把本地 WorkBuddy skill 一键打包并发布到 SkillHub 社区源（zip 打包 + CLI 调用 + 限流重试 + JSON 输出）。
 description_zh: 把本地 WorkBuddy skill 一键打包并发布到 SkillHub 社区源。自动处理 zip 打包（排除 SkillHub 拒收的 .bat/LICENSE/README/.gitignore/.git 等，以及 cache/ 等运行期产物；支持 --exclude 自定义排除，绕过 png 等二进制被拒）、调用 skillhub CLI、429/5xx 限流自动退避、版本一致性校验、token 从 ~/.skillhub/credentials.json 自动加载、可选 --bump-version 自动 patch+1、支持 --dry-run 预检和 --json 结构化输出。用户提到"发布 skill 到 skillhub""更新 skillhub 上的 skill""publish skill to skillhub""推送到 skillhub"时触发。不适用于：GitHub 开源发布（走 xueren-skill-publish-github）、Skill.md 模板校验（走 xueren-skill-init-std）。
 description_en: One-click package and publish WorkBuddy skills to SkillHub community.
-version: 1.0.10
+version: 1.0.12
 author: 雪人
 license: MIT
 github: https://github.com/JackieZheng/xueren-skill-publish-skillhub
