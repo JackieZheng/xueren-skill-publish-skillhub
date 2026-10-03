@@ -2,13 +2,13 @@
 id: xueren-skill-publish-skillhub
 name: 雪人老师·Skill发布到SkillHub
 title: 雪人老师·Skill发布到SkillHub
-description: 把本地 WorkBuddy skill 一键打包并发布到 SkillHub 社区源。自动处理 zip 打包（排除 SkillHub 拒收的 .bat/LICENSE/README/.gitignore/.git 等）、调用 skillhub CLI、429/5xx 限流自动退避、版本一致性校验、token 从 ~/.skillhub/credentials.json 自动加载、可选 --bump-version 自动 patch+1、支持 --dry-run 预检和 --json 结构化输出。用户提到"发布 skill 到 skillhub""更新 skillhub 上的 skill""publish skill to skillhub""推送到 skillhub"时触发。不适用于：GitHub 开源发布（走 xueren-skill-publish-github）、Skill.md 模板校验（走 xueren-skill-init-std）。
+description: 把本地 WorkBuddy skill 一键打包并发布到 SkillHub 社区源。自动处理 zip 打包（排除 SkillHub 拒收的 .bat/LICENSE/README/.gitignore/.git 等，以及 cache/ 等运行期产物；支持 --exclude 自定义排除，绕过 png 等二进制被拒）、调用 skillhub CLI、429/5xx 限流自动退避、版本一致性校验、token 从 ~/.skillhub/credentials.json 自动加载、可选 --bump-version 自动 patch+1、支持 --dry-run 预检和 --json 结构化输出。用户提到"发布 skill 到 skillhub""更新 skillhub 上的 skill""publish skill to skillhub""推送到 skillhub"时触发。不适用于：GitHub 开源发布（走 xueren-skill-publish-github）、Skill.md 模板校验（走 xueren-skill-init-std）。
 slug: xueren-skill-publish-skillhub
 displayName: 雪人老师·Skill发布到SkillHub
 summary: 把本地 WorkBuddy skill 一键打包并发布到 SkillHub 社区源（zip 打包 + CLI 调用 + 限流重试 + JSON 输出）。
-description_zh: 把本地 WorkBuddy skill 一键打包并发布到 SkillHub 社区源。自动处理 zip 打包（排除 SkillHub 拒收的 .bat/LICENSE/README/.gitignore/.git 等）、调用 skillhub CLI、429/5xx 限流自动退避、版本一致性校验、token 从 ~/.skillhub/credentials.json 自动加载、可选 --bump-version 自动 patch+1、支持 --dry-run 预检和 --json 结构化输出。用户提到"发布 skill 到 skillhub""更新 skillhub 上的 skill""publish skill to skillhub""推送到 skillhub"时触发。不适用于：GitHub 开源发布（走 xueren-skill-publish-github）、Skill.md 模板校验（走 xueren-skill-init-std）。
+description_zh: 把本地 WorkBuddy skill 一键打包并发布到 SkillHub 社区源。自动处理 zip 打包（排除 SkillHub 拒收的 .bat/LICENSE/README/.gitignore/.git 等，以及 cache/ 等运行期产物；支持 --exclude 自定义排除，绕过 png 等二进制被拒）、调用 skillhub CLI、429/5xx 限流自动退避、版本一致性校验、token 从 ~/.skillhub/credentials.json 自动加载、可选 --bump-version 自动 patch+1、支持 --dry-run 预检和 --json 结构化输出。用户提到"发布 skill 到 skillhub""更新 skillhub 上的 skill""publish skill to skillhub""推送到 skillhub"时触发。不适用于：GitHub 开源发布（走 xueren-skill-publish-github）、Skill.md 模板校验（走 xueren-skill-init-std）。
 description_en: One-click package and publish WorkBuddy skills to SkillHub community.
-version: 1.0.1
+version: 1.0.4
 author: 雪人
 license: MIT
 github: https://github.com/JackieZheng/xueren-skill-publish-skillhub
@@ -35,6 +35,8 @@ metadata:
 **核心价值**：
 - **零外部依赖**：只用 Python 标准库 + SkillHub 官方 CLI（`~/.skillhub/skills_store_cli.py`）。
 - **打包即合规**：自动排除 SkillHub 拒收的文件（`.bat` / `LICENSE` / `README` / `.gitignore` / `.git` / `__pycache__` / `.venv` / `node_modules` 等），避免内容审核失败。
+- **开发日志不外发**（用户约定，2026-10-01）：`DEVLOG.md` 一律不进 zip，与 GitHub 发布口径一致（常量 `NEVER_PUBLISH`）。
+- **仓库专用文件不进包**：`.gitignore` / `.gitattributes` / `.gitmodules` / `LICENSE` / `README*` 都是仓库元数据，SkillHub 会以「不允许的文件类型」400 拒收（`.gitattributes` 是 2026-10-01 实测新增的）。
 - **限流自动重试**：429 / 5xx 自动指数退避重试（默认 3 次），409「version already exists」明确报错退出。
 - **版本管理**：默认读 SKILL.md frontmatter 的 `version`；`--bump-version` 自动 patch+1；`--version X.Y.Z` 手动覆盖。
 - **零硬编码身份**：token 从 `~/.skillhub/credentials.json` 自动加载（`skillhub login --key skh_xxx` 一次性登录）；`--token` 可临时覆盖。
@@ -89,6 +91,7 @@ metadata:
 | `--workdir` | 临时 zip 目录 | `<skill_dir>/../.tmp-publish-skillhub/` |
 | `--retries` | 失败重试次数 | 3 |
 | `--dry-run` | 仅打包 + CLI `--dry-run`，不真推 | 关闭 |
+| `--exclude` | 额外排除的 glob（相对 skill 根目录，可重复；如 `--exclude "assets/*.png"`）| 无 |
 | `--json` | JSON 输出 | 关闭 |
 
 ## 资源目录
@@ -104,6 +107,7 @@ metadata:
 | `SkillHub 已存在该版本，拒绝覆盖` | 409 | 版本号 bump 后重发；或到 SkillHub 页面手动删除旧版本 |
 | `429` / `rate limit` | 请求过快 | 脚本自动退避重试；仍失败时手动等 60s 后重发 |
 | `不允许的文件类型` | zip 含 `.bat` / `.exe` 等 | 脚本默认已排除；若仍报，检查是否有非常规扩展名 |
+| `请求失败 (400): 不允许的文件类型: assets/xxx.png` | **图片/二进制**（png/jpg/zip…）——**`--dry-run` 不校验类型，真发才拒** | 加 `--exclude "assets/*.png"` 排除图片后重发 |
 | `SKILL.md 缺少 version 字段` | frontmatter 不全 | 先补齐 SKILL.md（走 xueren-skill-init-std）|
 | `403 / 401` | token 无效或过期 | `skillhub login --key skh_xxx` 重新登录；或用 `--token skh_...` |
 | `SKILL.md 未找到 slug` | frontmatter 无 slug | 脚本 fallback 到目录名；建议补齐避免混淆 |
@@ -137,6 +141,12 @@ python ~/.workbuddy/skills/xueren-skill-publish-skillhub/scripts/publish_skillhu
   --skill xueren-poster-maker \
   --changelog "预检" \
   --dry-run
+
+# 场景 5：含图片资源（SkillHub 拒收 png，需显式排除）
+python ~/.workbuddy/skills/xueren-skill-publish-skillhub/scripts/publish_skillhub.py \
+  --skill xueren-workbuddy-live-progress \
+  --exclude "assets/*.png" \
+  --changelog "首次发布"
 
 # 场景 4：结构化输出（给编排 skill 用）
 python ~/.workbuddy/skills/xueren-skill-publish-skillhub/scripts/publish_skillhub.py \

@@ -22,6 +22,7 @@ publish_skillhub.py — 把本地 WorkBuddy skill 打包并发布到 SkillHub �
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -38,11 +39,30 @@ from typing import Dict, List, Optional, Tuple
 # 常量
 # ---------------------------------------------------------------------------
 
-SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".cache", ".idea", ".vscode", ".pytest_cache"}
+SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".cache", "cache",
+             ".idea", ".vscode", ".pytest_cache", ".tmp_verify", ".tmp-publish-skillhub",
+             # playwright 持久化 profile：调试遗留（含 .db / localStorage / Session Storage），
+             # 既占体积又容易被 SkillHub 内容审核判为「不允许的文件类型」而 400 拒收。
+             # 2026-10-03 实测：`scripts/.pwprofile/Default/declarative_performance_observer.db`
+             # 会把整个发布打成失败。与 xueren-skill-backup 的 EXCLUDE_DIRS 口径保持一致。
+             ".pwprofile"}
 # SkillHub 拒收的扩展名（会触发内容审核失败）
 SKIP_EXT = {".bat", ".cmd", ".exe", ".msi", ".sys", ".dll", ".ocx", ".scr", ".vbs", ".ps1", ".psm1"}
+# 运行期产物扩展名：日志/截图缓存不上传（避免把本机路径、调试图带进社区包）
+SKIP_EXT.update({".log", ".pyc", ".pyo"})
+# 风险扩展名：SkillHub 内容审核可能拒收（实测 png 会被 400 拒绝）。
+# 不默认排除（有的 skill 的图片是运行必需资源），只在打包后提示，由调用方用 --exclude 决定。
+RISKY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico",
+             ".mp4", ".mov", ".avi", ".zip", ".7z", ".tar", ".gz",
+             ".pdf", ".docx", ".xlsx", ".pptx"}
 # SkillHub 拒收的顶层文件名（大小写敏感 + 大写忽略）
-SKIP_TOP_LEVEL_NAMES = {".gitignore", "LICENSE", "LICENSE-MIT", "LICENSE.txt", "README", "README.md", "README.zh.md"}
+# `.gitattributes` / `.gitmodules` 是**仓库专用元数据**，SkillHub 会以
+# 「不允许的文件类型」400 拒收（实测 2026-10-01）——与 .gitignore 同类，一律不进包。
+SKIP_TOP_LEVEL_NAMES = {".gitignore", ".gitattributes", ".gitmodules",
+                        "LICENSE", "LICENSE-MIT", "LICENSE.txt",
+                        "README", "README.md", "README.zh.md"}
+# 按用户约定（2026-10-01）：**开发日志不随发布物外发**——SkillHub 与 GitHub 口径一致。
+NEVER_PUBLISH = {"DEVLOG.md"}
 
 HOME = Path(os.path.expanduser("~"))
 DEFAULT_CLI = HOME / ".skillhub" / "skills_store_cli.py"
@@ -148,13 +168,19 @@ def find_cli(cli_path: Optional[str]) -> Path:
 # 打包
 # ---------------------------------------------------------------------------
 
-def build_zip(skill_dir: Path, out_zip: Path) -> Tuple[int, List[str], List[str]]:
-    """打包 skill 目录为 zip。返回 (总文件数, 已包含路径, 已排除路径)。"""
+def build_zip(skill_dir: Path, out_zip: Path,
+              extra_exclude: Optional[List[str]] = None) -> Tuple[int, List[str], List[str], List[str]]:
+    """打包 skill 目录为 zip。返回 (总文件数, 已包含路径, 已排除路径, 风险文件)。
+
+    extra_exclude: 额外的排除 glob（相对 skill 根目录，如 "assets/*.png"）。
+    """
     if out_zip.exists():
         out_zip.unlink()
 
+    pats = [p for p in (extra_exclude or []) if p]
     included: List[str] = []
     excluded: List[str] = []
+    risky: List[str] = []
 
     with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as z:
         for f in sorted(skill_dir.rglob("*")):
@@ -162,6 +188,7 @@ def build_zip(skill_dir: Path, out_zip: Path) -> Tuple[int, List[str], List[str]
                 continue
             rel = f.relative_to(skill_dir.parent).as_posix()  # 含 skill 目录名前缀
             parts = rel.split("/")
+            inner = "/".join(parts[1:])                      # 相对 skill 根目录
 
             # 排除目录内嵌（.git/ 之类）
             if any(p in SKIP_DIRS for p in parts[1:-1]):
@@ -175,10 +202,21 @@ def build_zip(skill_dir: Path, out_zip: Path) -> Tuple[int, List[str], List[str]
             if len(parts) == 2 and parts[1] in SKIP_TOP_LEVEL_NAMES:
                 excluded.append(f"{rel} [top:{parts[1]}]")
                 continue
+            # 开发日志等「不外发」文件（用户约定，与 GitHub 发布口径一致）
+            if len(parts) == 2 and parts[1] in NEVER_PUBLISH:
+                excluded.append(f"{rel} [never-publish]")
+                continue
+            # 用户显式 --exclude 的 glob
+            if pats and any(fnmatch.fnmatch(inner, p) or fnmatch.fnmatch(rel, p) for p in pats):
+                excluded.append(f"{rel} [exclude]")
+                continue
+            # 风险类型：SkillHub 内容审核可能拒收（如 png 图片），放行但提示
+            if f.suffix.lower() in RISKY_EXT:
+                risky.append(f"{inner} [risk:{f.suffix}]")
             z.write(f, rel)
             included.append(rel)
 
-    return len(included), included, excluded
+    return len(included), included, excluded, risky
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +300,8 @@ def main() -> int:
     ap.add_argument("--workdir", default="", help="临时 zip 输出目录（默认 <skill_dir>/../.tmp-publish-skillhub/）")
     ap.add_argument("--retries", type=int, default=3, help="失败重试次数（默认 3）")
     ap.add_argument("--dry-run", action="store_true", help="仅打包并跑 --dry-run，不真的推送")
+    ap.add_argument("--exclude", action="append", default=[],
+                    help="额外排除的 glob（相对 skill 根目录，可重复；如 --exclude \"assets/*.png\"）")
     ap.add_argument("--json", action="store_true", help="以 JSON 单行输出结果")
     args = ap.parse_args()
 
@@ -310,7 +350,8 @@ def main() -> int:
     workdir.mkdir(parents=True, exist_ok=True)
     zip_path = workdir / f"{skill_dir.name}.zip"
 
-    n_included, included, excluded = build_zip(skill_dir, zip_path)
+    n_included, included, excluded, risky = build_zip(skill_dir, zip_path,
+                                                       extra_exclude=args.exclude)
     if n_included == 0:
         return _emit(args.json, {
             "ok": False,
@@ -319,6 +360,10 @@ def main() -> int:
         })
 
     _log(f"[pack] {n_included} 文件, {len(excluded)} 排除 → {zip_path}", quiet_json)
+    if risky:
+        _log("[pack] ⚠️ 含风险类型文件（SkillHub 可能拒收，如 png）：%s" % ", ".join(risky[:5]),
+             quiet_json)
+        _log("       如需排除请加：--exclude \"assets/*.png\"（可多次）", quiet_json)
 
     # 6) 获取 token
     token, token_src = get_token(args.token or None)
@@ -345,6 +390,7 @@ def main() -> int:
         "n_included": n_included,
         "n_excluded": len(excluded),
         "excluded_sample": excluded[:10],
+        "risky": risky[:10],
         "token_source": token_src,
         "cli": str(cli),
         "returncode": rc,
