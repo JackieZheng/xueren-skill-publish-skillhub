@@ -12,7 +12,10 @@ publish_skillhub.py — 把本地 WorkBuddy skill 打包并发布到 SkillHub �
 
 设计原则：
 - 零外部依赖：只依赖 Python 标准库 + 已安装的 SkillHub CLI（~/.skillhub/skills_store_cli.py）。
-- 打包即排除：SkillHub 拒收 .bat / LICENSE / README / .gitignore / .git / __pycache__ / .venv / node_modules 等。
+- 打包即排除：SkillHub 拒收 .bat / LICENSE / .gitignore / .git / __pycache__ / .venv / node_modules 等。
+- **面向用户、不做开发者仓库**（2026-10-03）：SkillHub 的读者是「用 skill 的人」，因此
+  ① `README.md` **进包**（承担功能介绍 / 安装 / 快速上手，README 必须写成用户向）；
+  ② `docs/` 与 `_test_*` / `_probe_*` / `_demo_*` 等**开发 / 测试脚本一律不进包**（只发 GitHub，见 publish-github skill）。
 - 版本一致：默认从 SKILL.md frontmatter 读 version；--version 可覆盖；--bump-version 自动 patch+1。
 - 幂等重试：对 SkillHub 429 限流自动退避重试；对 409 "version already exists" 明确报错退出。
 - 无 token 硬编码：Token 从 ~/.skillhub/credentials.json 读取（skillhub login 后自动生成）；--token 可覆盖。
@@ -45,7 +48,10 @@ SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".cache", "
              # 既占体积又容易被 SkillHub 内容审核判为「不允许的文件类型」而 400 拒收。
              # 2026-10-03 实测：`scripts/.pwprofile/Default/declarative_performance_observer.db`
              # 会把整个发布打成失败。与 xueren-skill-backup 的 EXCLUDE_DIRS 口径保持一致。
-             ".pwprofile"}
+             ".pwprofile",
+             # 2026-10-03 用户约定：docs/ = 开发 / 排障手册（三层分工里的第三层），
+             # 读者是开发者不是普通用户 → 只发 GitHub，不进 SkillHub 用户包。
+             "docs"}
 # SkillHub 拒收的扩展名（会触发内容审核失败）
 SKIP_EXT = {".bat", ".cmd", ".exe", ".msi", ".sys", ".dll", ".ocx", ".scr", ".vbs", ".ps1", ".psm1"}
 # 运行期产物扩展名：日志/截图缓存不上传（避免把本机路径、调试图带进社区包）
@@ -58,11 +64,31 @@ RISKY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico",
 # SkillHub 拒收的顶层文件名（大小写敏感 + 大写忽略）
 # `.gitattributes` / `.gitmodules` 是**仓库专用元数据**，SkillHub 会以
 # 「不允许的文件类型」400 拒收（实测 2026-10-01）——与 .gitignore 同类，一律不进包。
+# ⚠️ README **不在此列**（2026-10-03 用户约定放宽）：SkillHub 面向终端用户，
+# 带一份 README 正好承担「功能介绍 / 安装 / 快速上手」——但 README 必须写成
+# 用户向的功能介绍；开发 / 测试内容放 docs/ 或 DEVLOG.md，不进用户包。
 SKIP_TOP_LEVEL_NAMES = {".gitignore", ".gitattributes", ".gitmodules",
-                        "LICENSE", "LICENSE-MIT", "LICENSE.txt",
-                        "README", "README.md", "README.zh.md"}
+                        "LICENSE", "LICENSE-MIT", "LICENSE.txt"}
 # 按用户约定（2026-10-01）：**开发日志不随发布物外发**——SkillHub 与 GitHub 口径一致。
-NEVER_PUBLISH = {"DEVLOG.md"}
+NEVER_PUBLISH = {"devlog.md"}      # 用户约定（2026-10-01）；小写存放，判定见 _is_never_publish()
+
+# 按用户约定（2026-10-03 修订）：**SkillHub 与 GitHub 都算「产品分发」，开发 / 测试内容两边一律不外发**
+# （原口径「GitHub 面向开发者、开发脚本是价值」已被用户否定：Release 不是二次开发源码站）。
+# 本侧只做「不进用户包」；github 侧 publish_skill.py 用同一套前缀 / 后缀规则严格对齐。
+# 匹配「相对 skill 根目录的路径」中的文件名（小写、忽略目录层级）：
+SKIP_NAME_PREFIXES = ("_test_", "test_", "_probe_", "_debug_", "_demo_", "_selftest_", "_bench_")
+SKIP_NAME_SUFFIXES = ("_test.py", "_tests.py", "_probe.py", "_check.py", "_debug.py")
+
+
+def _is_never_publish(name_lower: str) -> bool:
+    """开发日志等「绝对不进用户包」文件名判定（小写入参，见 NEVER_PUBLISH 注释）。"""
+    return name_lower in NEVER_PUBLISH
+
+
+def _is_dev_test_script(inner: str) -> bool:
+    """inner = 相对 skill 根目录的路径（如 `scripts/_test_check_update.py`）。"""
+    name = os.path.basename(inner).lower()
+    return name.startswith(SKIP_NAME_PREFIXES) or name.endswith(SKIP_NAME_SUFFIXES)
 
 HOME = Path(os.path.expanduser("~"))
 DEFAULT_CLI = HOME / ".skillhub" / "skills_store_cli.py"
@@ -168,6 +194,22 @@ def find_cli(cli_path: Optional[str]) -> Path:
 # 打包
 # ---------------------------------------------------------------------------
 
+# 包内 markdown 的图片引用（用于查「资源没进包 → 裂图」）
+MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
+
+
+def _inner_rel(skill_dir: Path, rel: str) -> str:
+    """把 rel（含 skill 目录名前缀，zip 内写的是这个）转成相对 skill 根的路径。"""
+    parts = rel.split("/")
+    return "/".join(parts[1:]) if len(parts) > 1 else rel
+
+
+def _dirname(rel: str) -> Path:
+    """markdown 所在目录（相对 skill 根），用于解析相对图片路径。"""
+    p = Path(rel)
+    return p.parent if str(p.parent) not in (".", "") else Path(".")
+
+
 def build_zip(skill_dir: Path, out_zip: Path,
               extra_exclude: Optional[List[str]] = None) -> Tuple[int, List[str], List[str], List[str]]:
     """打包 skill 目录为 zip。返回 (总文件数, 已包含路径, 已排除路径, 风险文件)。
@@ -181,6 +223,8 @@ def build_zip(skill_dir: Path, out_zip: Path,
     included: List[str] = []
     excluded: List[str] = []
     risky: List[str] = []
+    in_pkg_inner: set = set()          # 已进包的「相对 skill 根」路径，用于查裂图引用
+    md_docs: List[str] = []            # 已进包的 markdown（后面离块扫描图片引用）
 
     with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as z:
         for f in sorted(skill_dir.rglob("*")):
@@ -194,6 +238,14 @@ def build_zip(skill_dir: Path, out_zip: Path,
             if any(p in SKIP_DIRS for p in parts[1:-1]):
                 excluded.append(rel)
                 continue
+            # 排除开发 / 测试文档（docs/ 等用户用不到的排障手册，只发 GitHub）
+            if parts[1].lower() in SKIP_DIRS:
+                excluded.append(f"{rel} [dir:dev-doc]")
+                continue
+            # 排除开发 / 测试脚本（_test_* / _probe_* / _demo_*，只发 GitHub）
+            if _is_dev_test_script(inner):
+                excluded.append(f"{rel} [dev-script]")
+                continue
             # 排除扩展名（SkillHub 内容审核）
             if f.suffix.lower() in SKIP_EXT:
                 excluded.append(f"{rel} [ext:{f.suffix}]")
@@ -203,7 +255,9 @@ def build_zip(skill_dir: Path, out_zip: Path,
                 excluded.append(f"{rel} [top:{parts[1]}]")
                 continue
             # 开发日志等「不外发」文件（用户约定，与 GitHub 发布口径一致）
-            if len(parts) == 2 and parts[1] in NEVER_PUBLISH:
+            # v1.0.9：改为按**文件名**匹配（不限层级）—— 2026-10-03 用户约定 DEVLOG.md 归入
+            # docs/ 目录（开发级文档统一住 docs），路径变成 docs/DEVLOG.md，旧判定会漏。
+            if _is_never_publish(os.path.basename(parts[1]).lower()):
                 excluded.append(f"{rel} [never-publish]")
                 continue
             # 用户显式 --exclude 的 glob
@@ -213,10 +267,35 @@ def build_zip(skill_dir: Path, out_zip: Path,
             # 风险类型：SkillHub 内容审核可能拒收（如 png 图片），放行但提示
             if f.suffix.lower() in RISKY_EXT:
                 risky.append(f"{inner} [risk:{f.suffix}]")
+            in_pkg_inner.add(inner)
+            if inner.lower().endswith((".md", ".markdown")):
+                md_docs.append(rel)
             z.write(f, rel)
             included.append(rel)
 
-    return len(included), included, excluded, risky
+    # 包内 md 引用的本地资源若没进包 → 用户装完看 README 会裂图，明确提示改外链。
+    # 必须在 with 块**外**扫描：zip 处于写状态时读条目不可靠。
+    broken_img: List[str] = []
+    if md_docs:
+        try:
+            with zipfile.ZipFile(out_zip, "r") as zr:
+                for rel in md_docs:
+                    md_rel = _inner_rel(skill_dir, rel)
+                    try:
+                        text = zr.read(rel).decode("utf-8", "replace")
+                    except Exception:
+                        continue
+                    for src in MD_IMAGE_RE.findall(text):
+                        if src.lower().startswith(("http://", "https://", "data:", "//")):
+                            continue          # 外链图：SkillHub / GitHub 都能显示，不告警
+                        resolved = (_dirname(md_rel) / src).as_posix().lstrip("/")
+                        if resolved not in in_pkg_inner:
+                            broken_img.append(f"{md_rel} -> {src}")
+
+        except Exception:
+            pass
+
+    return len(included), included, excluded, risky, broken_img
 
 
 # ---------------------------------------------------------------------------
@@ -350,8 +429,8 @@ def main() -> int:
     workdir.mkdir(parents=True, exist_ok=True)
     zip_path = workdir / f"{skill_dir.name}.zip"
 
-    n_included, included, excluded, risky = build_zip(skill_dir, zip_path,
-                                                       extra_exclude=args.exclude)
+    n_included, included, excluded, risky, broken_img = build_zip(skill_dir, zip_path,
+                                                                  extra_exclude=args.exclude)
     if n_included == 0:
         return _emit(args.json, {
             "ok": False,
@@ -364,6 +443,11 @@ def main() -> int:
         _log("[pack] ⚠️ 含风险类型文件（SkillHub 可能拒收，如 png）：%s" % ", ".join(risky[:5]),
              quiet_json)
         _log("       如需排除请加：--exclude \"assets/*.png\"（可多次）", quiet_json)
+    if broken_img:
+        _log("[pack] ⚠️ %d 处图片引用指向**没进包**的本地资源，装完看文档会裂图：%s"
+             % (len(broken_img), "; ".join(broken_img[:5])), quiet_json)
+        _log("       修法：把图片改成**外链 URL**（SkillHub / GitHub 都支持外链图片）或"
+             "把资源打进包（注意 png 会被拒收，外链更稳）", quiet_json)
 
     # 6) 获取 token
     token, token_src = get_token(args.token or None)

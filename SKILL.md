@@ -8,7 +8,7 @@ displayName: 雪人老师·Skill发布到SkillHub
 summary: 把本地 WorkBuddy skill 一键打包并发布到 SkillHub 社区源（zip 打包 + CLI 调用 + 限流重试 + JSON 输出）。
 description_zh: 把本地 WorkBuddy skill 一键打包并发布到 SkillHub 社区源。自动处理 zip 打包（排除 SkillHub 拒收的 .bat/LICENSE/README/.gitignore/.git 等，以及 cache/ 等运行期产物；支持 --exclude 自定义排除，绕过 png 等二进制被拒）、调用 skillhub CLI、429/5xx 限流自动退避、版本一致性校验、token 从 ~/.skillhub/credentials.json 自动加载、可选 --bump-version 自动 patch+1、支持 --dry-run 预检和 --json 结构化输出。用户提到"发布 skill 到 skillhub""更新 skillhub 上的 skill""publish skill to skillhub""推送到 skillhub"时触发。不适用于：GitHub 开源发布（走 xueren-skill-publish-github）、Skill.md 模板校验（走 xueren-skill-init-std）。
 description_en: One-click package and publish WorkBuddy skills to SkillHub community.
-version: 1.0.5
+version: 1.0.10
 author: 雪人
 license: MIT
 github: https://github.com/JackieZheng/xueren-skill-publish-skillhub
@@ -34,9 +34,30 @@ metadata:
 
 **核心价值**：
 - **零外部依赖**：只用 Python 标准库 + SkillHub 官方 CLI（`~/.skillhub/skills_store_cli.py`）。
-- **打包即合规**：自动排除 SkillHub 拒收的文件（`.bat` / `LICENSE` / `README` / `.gitignore` / `.git` / `__pycache__` / `.venv` / `node_modules` 等），避免内容审核失败。
-- **开发日志不外发**（用户约定，2026-10-01）：`DEVLOG.md` 一律不进 zip，与 GitHub 发布口径一致（常量 `NEVER_PUBLISH`）。
-- **仓库专用文件不进包**：`.gitignore` / `.gitattributes` / `.gitmodules` / `LICENSE` / `README*` 都是仓库元数据，SkillHub 会以「不允许的文件类型」400 拒收（`.gitattributes` 是 2026-10-01 实测新增的）。
+- **打包即合规**：自动排除 SkillHub 拒收的文件（`.bat` / `LICENSE` / `.gitignore` / `.git` / `__pycache__` / `.venv` / `node_modules` 等），避免内容审核失败。
+- **开发日志不外发**（用户约定，2026-10-01）：`docs/DEVLOG.md` 一律不进 zip，与 GitHub 发布口径一致（常量 `NEVER_PUBLISH`）。
+- **仓库专用文件不进包**：`.gitignore` / `.gitattributes` / `.gitmodules` / `LICENSE` / `LICENSE-*` 都是仓库元数据，SkillHub 会以「不允许的文件类型」400 拒收（`.gitattributes` 是 2026-10-01 实测新增的）。
+- **🔴 产品口径：开发 / 测试内容两边都不外发**（用户约定，2026-10-03 修订）：
+  SkillHub 与 GitHub **都是产品分发渠道**（Release 不是二次开发源码站），
+  此前「GitHub 面向开发者因而开发资料照发」的口径已被否定，现两侧同一标准：
+
+  | 类型 | SkillHub（用户） | GitHub（开发者） |
+  |---|---|---|
+  | `SKILL.md` / `scripts/*.py`（功能本体） | ✅ 进包 | ✅ 进仓库 |
+  | `README.md`（**功能介绍 / 安装 / 快速上手**） | ✅ **进包**（2026-10-03 起放开） | ✅ 进仓库（作为仓库首页说明） |
+  | `docs/*.md`（开发 / 排障手册） | ❌ 排除（常量 `SKIP_DIRS` 加 `docs`） | ❌ 排除（`is_excluded()` + 远端删除条目） |
+  | `_test_*` / `_probe_*` / `_demo_*` / `_debug_*` / `_selftest_*` / `test_*`（自测与调试脚本） | ❌ 排除（`_is_dev_test_script()`） | ❌ 排除（`is_excluded()`） |
+  | `check_update.py` / `verify_published.py`（发布工具链本体） | ✅ 进包 | ✅ 进仓库 |
+  | `docs/DEVLOG.md` | ❌ 排除（`NEVER_PUBLISH`） | ❌ 排除（`NEVER_PUBLISH`） |
+
+  顺带要求：**`README.md` 必须写成用户向的功能介绍**；开发 / 测试内容一律放 `docs/` 或 `docs/DEVLOG.md`，不要混进 README —— 否则会随用户包外发。
+- **🔴 图片一律用外链 URL（2026-10-03 实证，跨项目）**：`png` 会被 SkillHub 拒收（`RISKY_EXT`，实测 400），
+  所以 md 里引用本地 `assets/*.png` **要么打不进包（装完裂图）、要么直接被拒收**；**改成 `https://` 外链图最稳，两个渠道都支持**：
+  - **SkillHub 详情页渲染的是 `SKILL.md` 正文，不是 README**（实测：页面请求 `/api/v1/skills/<slug>/file?path=SKILL.md`）；
+    外链图**原样保留、直连加载成功**（实测样本 `showapi/lesson-plan-image-showapi` 的 `oss.showapi.com` 图 `naturalWidth>0`）。
+  - ⚠️ 渲染器只认**正文段落级**图片；写在列表项里的 `![]()` 会**原样残留成 markdown 文本不渲染**（实测样本 `user_0caf726f/finance-advisor`）。插图放标题下的独立段落。
+  - **README 的外链图**：社区详情页不渲染 README（用户装完在本地看，联网即正常显示）；`README.md` 里放外链图同样能解决本地裂图。
+  - 脚本已内置**裂图自检**：打包后扫描包内 md 的图片引用，指向未进包资源时在 `[pack] ⚠️` 里点名并提示改外链（实测 `--exclude "assets/*.png"` 场景精确告警）。
 - **限流自动重试**：429 / 5xx 自动指数退避重试（默认 3 次），409「version already exists」明确报错退出。
 - **版本管理**：默认读 SKILL.md frontmatter 的 `version`；`--bump-version` 自动 patch+1；`--version X.Y.Z` 手动覆盖。
 - **零硬编码身份**：token 从 `~/.skillhub/credentials.json` 自动加载（`skillhub login --key skh_xxx` 一次性登录）；`--token` 可临时覆盖。
@@ -155,4 +176,4 @@ python ~/.workbuddy/skills/xueren-skill-publish-skillhub/scripts/publish_skillhu
   --json
 ```
 
-> 本 skill 的版本演进历史维护在同目录 `DEVLOG.md`（拆分约定见 `xueren-skill-backup` SKILL.md）。
+> 本 skill 的版本演进历史维护在同目录 `docs/DEVLOG.md`（拆分约定见 `xueren-skill-backup` SKILL.md）。
