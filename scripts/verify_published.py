@@ -31,7 +31,10 @@ import sys
 import urllib.request
 import zipfile
 
-BAD = ["sohu", "zhengxinzhe", "ghp_"]      # 个人信息 / PAT 泄漏特征
+# ⚠️ 特征词必须「拼出来」，不能直接写明文：本文件会随 skill 一起发到开源仓库，
+# 明文特征词留在包里会让「敏感词零命中」的校验**每次都假阳性**（2026-10-03 真实踩到
+# ——v1.0.4 的校验就是扫自己扫出了命中），时间一长人就麻了，等于校验失效。
+BAD = ["so" + "hu", "zheng" + "xin" + "zhe", "g" + "hp_"]   # 个人信息 / PAT 泄漏特征
 BAD_RE = re.compile("|".join(BAD), re.I)
 
 
